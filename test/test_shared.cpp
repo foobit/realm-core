@@ -2037,7 +2037,6 @@ TEST_IF(Shared_AsyncMultiprocess, allow_async)
 #ifdef _WIN32
 
 
-#if 0 // FIXME: Finn
 
 // wait_for_change() must be modified
 TEST(Shared_WaitForChangeAfterOwnCommit)
@@ -2051,7 +2050,7 @@ TEST(Shared_WaitForChangeAfterOwnCommit)
     bool b = sg->wait_for_change();
 }
 
-// NOTE BOTE NOTE: This unit test relies on that Shared_WaitForChangeAfterOwnCommit works, i.e. that
+// NOTE NOTE NOTE: This unit test relies on that Shared_WaitForChangeAfterOwnCommit works, i.e. that
 // wait_for_change() is modified
 ONLY(Shared_InterprocessWaitForChange)
 {
@@ -2059,74 +2058,98 @@ ONLY(Shared_InterprocessWaitForChange)
     // still has the .realm file open
     std::string path = get_test_path("Shared_InterprocessWaitForChange", ".realm");
 
-    // This works differently from POSIX: Here, the child process begins execution from the start of this unit
+    // winfork() works differently from POSIX: Here, the child process begins execution from the start of this unit
     // test and not from the place of fork().
+
     DWORD pid = winfork("Shared_InterprocessWaitForChange");
+//    DWORD pid = winfork("Shared_InterprocessWaitForChange");
+
 
     if (pid == -1) {
         CHECK(false);
         return;
     }
 
-    SharedGroup* sg = new SharedGroup(path);
-
-    // An old .realm file with random contents can exist (such as a leftover from earlier crash) with random
-    // data, so we always initialize the database
     {
-        Group& g = sg->begin_write();
-        if (g.size() == 1) {
-            g.remove_table("data");
+        SharedGroup* sg = new SharedGroup(path);
 
-            TableRef table = g.add_table("data");
-            table->add_column(type_Int, "ints");
-            table->add_empty_row();
-            table->set_int(0, 0, 0);
+        // An old .realm file with random contents can exist (such as a leftover from earlier crash) with random
+        // data, so we always initialize the database
+        {
+            Group& g = sg->begin_write();
+            if (g.size() == 1) {
+                g.remove_table("data");
+
+                TableRef table = g.add_table("data");
+                table->add_column(type_Int, "ints");
+                table->add_empty_row();
+                table->set_int(0, 0, 0);
+            }
             sg->commit();
+        }
+
+        bool first = false;
+
+        // By turn, incremenet the counter and wait for the other to increment it too
+        for (int i = 0; i < 20; i++)
+        {
+            std::cerr << i;
+                
+                Group& g = sg->begin_write();
+
+
+            if (g.size() == 1) {
+                TableRef table = g.get_table("data");
+                int64_t v = table->get_int(0, 0);
+
+                if (i == 0 && v == 0)
+                    first = true;
+
+                // Note: If this fails in child process (pid != 0) it might go undetected. This is not
+                // critical since it will most likely result in a failure in the parent process also.
+                CHECK_EQUAL(v - (first ? 0 : 1), 2 * i);
+                if (v - (first ? 0 : 1) != 2 * i) {
+                std::cerr << "h";
+                    getchar();
+                }
+
+                table->set_int(0, 0, v + 1);
+            }
+
+            // millisleep(0) might yield time slice, so we use fastrand() to get cases of 0 delay.
+      //      if (fastrand(1))
+      //          millisleep((time(0) % 10) * 10);
+
+            sg->commit();
+
+      //      if (fastrand(1))
+       //         millisleep((time(0) % 10) * 10);
+
             sg->wait_for_change();
+
+      //      if (fastrand(1))
+      //          millisleep((time(0) % 10) * 10);
+        }
+
+        // Make other process terminate
+        {
+            Group& g = sg->begin_write();
+            sg->commit();
         }
     }
 
-    bool first = false;
-
-    // By turn, incremenet the counter and wait for the other to increment it too
-    for (int i = 0; i < 200; i++)
-    {
-        Group& g = sg->begin_write();
-        if (g.size() == 1) {
-            TableRef table = g.get_table("data");
-            int64_t v = table->get_int(0, 0);
-
-            if (i == 0 && v == 0)
-                first = true;
-
-            // Note: If this fails in child process (pid != 0) it might go undetected. This is not
-            // critical since it will most likely result in a failure in the parent process also.
-            CHECK_EQUAL(v - (first ? 0 : 1), 2 * i);
-            table->set_int(0, 0, v + 1);
+#if 0 // FIXME: This hangs on Windows for unknown reason. 
+    // SharedGroup object has gone out of scope, so we can delete the file now
+    while (File::exists(path)) {
+        try {
+            File::try_remove(path);
         }
-
-        // millisleep(0) might yield time slice, so we use fastrand() to get cases of 0 delay.
-        if(fastrand(1))
-            millisleep((time(0) % 10) * 10);
-
-        sg->commit();
-
-        if (fastrand(1))
-            millisleep((time(0) % 10) * 10);
-
-        sg->wait_for_change();
-
-        if (fastrand(1))
-            millisleep((time(0) % 10) * 10);
+        catch (...) {
+        }
     }
-
-    {
-        Group& g = sg->begin_write();
-        sg->commit();
-    }
+#endif
 }
 
-#endif // wait_for_change() must be modified
 
 #endif // _WIN32
 
