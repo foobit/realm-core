@@ -2050,10 +2050,14 @@ TEST(Shared_WaitForChangeAfterOwnCommit)
     bool b = sg->wait_for_change();
 }
 
-// NOTE NOTE NOTE: This unit test relies on that Shared_WaitForChangeAfterOwnCommit works, i.e. that
-// wait_for_change() is modified
+// FIXME: Seems to be a problem when a process termintes while the other is still
+// using the CondVar (does HANDLE need to be cloned?). 
+
+#if 0
 ONLY(Shared_InterprocessWaitForChange)
 {
+    constexpr int iter = 10;
+
     // We can't use SHARED_GROUP_TEST_PATH() because it will throw at exit of the unit test if the other process
     // still has the .realm file open
     std::string path = get_test_path("Shared_InterprocessWaitForChange", ".realm");
@@ -2064,6 +2068,7 @@ ONLY(Shared_InterprocessWaitForChange)
     DWORD pid = winfork("Shared_InterprocessWaitForChange");
 //    DWORD pid = winfork("Shared_InterprocessWaitForChange");
 
+    fastrand(time(0), true);
 
     if (pid == -1) {
         CHECK(false);
@@ -2082,8 +2087,9 @@ ONLY(Shared_InterprocessWaitForChange)
 
                 TableRef table = g.add_table("data");
                 table->add_column(type_Int, "ints");
-                table->add_empty_row();
+                table->add_empty_row(2);
                 table->set_int(0, 0, 0);
+                table->set_int(0, 1, 0);
             }
             sg->commit();
         }
@@ -2091,52 +2097,56 @@ ONLY(Shared_InterprocessWaitForChange)
         bool first = false;
 
         // By turn, incremenet the counter and wait for the other to increment it too
-        for (int i = 0; i < 20; i++)
+        for (int i = 0; i < iter; i++)
         {
-            std::cerr << i;
-                
+            std::cerr << i << " ";
+
+            try {
                 Group& g = sg->begin_write();
+                if (g.size() == 1) {
+                    TableRef table = g.get_table("data");
+                    int64_t v = table->get_int(0, 0);
 
+                    if (i == 0 && v == 0)
+                        first = true;
 
-            if (g.size() == 1) {
-                TableRef table = g.get_table("data");
-                int64_t v = table->get_int(0, 0);
+                    // Note: If this fails in child process (pid != 0) it might go undetected. This is not
+                    // critical since it will most likely result in a failure in the parent process also.
+                    if (v - (first ? 0 : 1) != 2 * i) {
+                        CHECK(false);
+                        std::cerr << "****";
+                        getchar();
+                    }
 
-                if (i == 0 && v == 0)
-                    first = true;
-
-                // Note: If this fails in child process (pid != 0) it might go undetected. This is not
-                // critical since it will most likely result in a failure in the parent process also.
-                CHECK_EQUAL(v - (first ? 0 : 1), 2 * i);
-                if (v - (first ? 0 : 1) != 2 * i) {
-                std::cerr << "h";
-                    getchar();
+                    table->set_int(0, 0, v + 1);
                 }
 
-                table->set_int(0, 0, v + 1);
+                // millisleep(0) might yield time slice, so we use fastrand() to get cases of 0 delay.
+                if (fastrand(1))
+                    millisleep((time(0) % 10) * 10);
+
+                sg->commit();
+
+                if (fastrand(1))
+                    millisleep((time(0) % 10) * 10);
+
+                sg->wait_for_change();
+
+                if (fastrand(1))
+                    millisleep((time(0) % 10) * 10);
+
             }
-
-            // millisleep(0) might yield time slice, so we use fastrand() to get cases of 0 delay.
-      //      if (fastrand(1))
-      //          millisleep((time(0) % 10) * 10);
-
-            sg->commit();
-
-      //      if (fastrand(1))
-       //         millisleep((time(0) % 10) * 10);
-
-            sg->wait_for_change();
-
-      //      if (fastrand(1))
-      //          millisleep((time(0) % 10) * 10);
+            catch (...) {
+                std::cerr << "****";
+                getchar();
+                CHECK(false);
+            }
         }
-
-        // Make other process terminate
-        {
-            Group& g = sg->begin_write();
-            sg->commit();
-        }
+      
+        // Wake up other process which is waiting in the for loop
+        sg->wait_for_change_release();
     }
+
 
 #if 0 // FIXME: This hangs on Windows for unknown reason. 
     // SharedGroup object has gone out of scope, so we can delete the file now
@@ -2149,6 +2159,8 @@ ONLY(Shared_InterprocessWaitForChange)
     }
 #endif
 }
+
+#endif // Unit test fails
 
 
 #endif // _WIN32

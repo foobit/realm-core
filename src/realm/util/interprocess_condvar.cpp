@@ -211,11 +211,16 @@ void InterprocessCondVar::set_shared_part(SharedPart& shared_part, std::string b
         0x7fffffff,  // max count
         LPWSTR(se.c_str()));
 
+//    DuplicateHandle(GetCurrentProcess(), m_sema, GetCurrentProcess(), &m_sema, 0, 0, 0);
+
     m_waiters_done = CreateEventW(
         nullptr,    // no security
         false,      // auto-reset
         false,      // non-signaled initially
         LPWSTR(ev.c_str()));
+
+//    DuplicateHandle(GetCurrentProcess(), m_waiters_done, GetCurrentProcess(), &m_waiters_done, 0, 0, 0);
+
 
 #endif // _WIN32
 #endif // REALM_CONDVAR_EMULATION
