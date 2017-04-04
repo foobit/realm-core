@@ -22,6 +22,8 @@
 #include <streambuf>
 #include <fstream>
 #include <tuple>
+#include <iostream>
+#include <fstream>
 
 // Need fork() and waitpid() for Shared_RobustAgainstDeathDuringWrite
 #ifndef _WIN32
@@ -88,6 +90,32 @@ using unit_test::TestContext;
 // `experiments/testcase.cpp` and then run `sh build.sh
 // check-testcase` (or one of its friends) from the command line.
 
+
+#ifdef _WIN32
+namespace {
+    // This does NOT work like on POSIX: The child will begin execution from the unit
+    // test entry point, not from where fork() took place.
+    DWORD winfork(std::string unit_test_name)
+    {
+        if (getenv("REALM_FORKED"))
+            return GetCurrentProcessId();
+
+        remove("winfork.bat");
+        std::ofstream myfile("winfork.bat");
+        myfile << "set UNITTEST_FILTER=" << unit_test_name << "\n";
+        myfile << "set REALM_FORKED=1\n";
+        char buf[1024] = { 0 };
+        DWORD ret = GetModuleFileNameA(NULL, buf, sizeof(buf));
+        myfile << "\"" << buf << "\"\n";
+        myfile.close();
+        int nRet = (int)ShellExecuteA(0, "open", "winfork.bat", 0, 0, SW_SHOWNORMAL);
+        if (nRet <= 32) {
+            return -1;
+        }
+        return 0;
+    }
+}
+#endif
 
 TEST(Shared_Unattached)
 {
@@ -2006,14 +2034,108 @@ TEST_IF(Shared_AsyncMultiprocess, allow_async)
 
 #endif // !defined(_WIN32) && !REALM_PLATFORM_APPLE
 
-#if !defined(_WIN32)
-// this test does not work with valgrind:
-#if 0
+#ifdef _WIN32
 
+
+#if 0 // FIXME: Finn
+
+// wait_for_change() must be modified
+TEST(Shared_WaitForChangeAfterOwnCommit)
+{
+    SHARED_GROUP_TEST_PATH(path);
+
+    SharedGroup* sg = new SharedGroup(path);
+    sg->begin_write();
+    sg->commit();
+
+    bool b = sg->wait_for_change();
+}
+
+// NOTE BOTE NOTE: This unit test relies on that Shared_WaitForChangeAfterOwnCommit works, i.e. that
+// wait_for_change() is modified
+ONLY(Shared_InterprocessWaitForChange)
+{
+    // We can't use SHARED_GROUP_TEST_PATH() because it will throw at exit of the unit test if the other process
+    // still has the .realm file open
+    std::string path = get_test_path("Shared_InterprocessWaitForChange", ".realm");
+
+    // This works differently from POSIX: Here, the child process begins execution from the start of this unit
+    // test and not from the place of fork().
+    DWORD pid = winfork("Shared_InterprocessWaitForChange");
+
+    if (pid == -1) {
+        CHECK(false);
+        return;
+    }
+
+    SharedGroup* sg = new SharedGroup(path);
+
+    // An old .realm file with random contents can exist (such as a leftover from earlier crash) with random
+    // data, so we always initialize the database
+    {
+        Group& g = sg->begin_write();
+        if (g.size() == 1) {
+            g.remove_table("data");
+
+            TableRef table = g.add_table("data");
+            table->add_column(type_Int, "ints");
+            table->add_empty_row();
+            table->set_int(0, 0, 0);
+            sg->commit();
+            sg->wait_for_change();
+        }
+    }
+
+    bool first = false;
+
+    // By turn, incremenet the counter and wait for the other to increment it too
+    for (int i = 0; i < 200; i++)
+    {
+        Group& g = sg->begin_write();
+        if (g.size() == 1) {
+            TableRef table = g.get_table("data");
+            int64_t v = table->get_int(0, 0);
+
+            if (i == 0 && v == 0)
+                first = true;
+
+            // Note: If this fails in child process (pid != 0) it might go undetected. This is not
+            // critical since it will most likely result in a failure in the parent process also.
+            CHECK_EQUAL(v - (first ? 0 : 1), 2 * i);
+            table->set_int(0, 0, v + 1);
+        }
+
+        // millisleep(0) might yield time slice, so we use fastrand() to get cases of 0 delay.
+        if(fastrand(1))
+            millisleep((time(0) % 10) * 10);
+
+        sg->commit();
+
+        if (fastrand(1))
+            millisleep((time(0) % 10) * 10);
+
+        sg->wait_for_change();
+
+        if (fastrand(1))
+            millisleep((time(0) % 10) * 10);
+    }
+
+    {
+        Group& g = sg->begin_write();
+        sg->commit();
+    }
+}
+
+#endif // wait_for_change() must be modified
+
+#endif // _WIN32
+
+// FIXME: This test does not work with valgrind, but we still run it on Windows
 // This test will hang infinitely instead of failing!!!
+#ifdef _WIN32
 TEST(Shared_WaitForChange)
 {
-    const int num_threads = 3;
+    const int num_threads = 1;
     Mutex mutex;
     int shared_state[num_threads];
     SharedGroup* sgs[num_threads];
@@ -2135,9 +2257,7 @@ TEST(Shared_WaitForChange)
     }
 }
 
-
-#endif // test is disabled
-#endif // endif not on windows
+#endif // _WIN32
 
 
 TEST(Shared_MultipleSharersOfStreamingFormat)

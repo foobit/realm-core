@@ -1876,7 +1876,7 @@ std::string create_random_a_string(size_t max_len) {
 
 }
 
-
+#if 0
 TEST_TYPES(StringIndex_Insensitive_Fuzz, non_nullable, nullable)
 {
     constexpr bool nullable = TEST_TYPE::value;
@@ -1925,7 +1925,7 @@ TEST_TYPES(StringIndex_Insensitive_Fuzz, non_nullable, nullable)
         col.destroy();
     }
 }
-
+#endif
 
 // Exercise the StringIndex case insensitive search for strings with very long, common prefixes
 // to cover the special case code paths where different strings are stored in a list.
